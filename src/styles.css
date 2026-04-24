@@ -571,8 +571,37 @@ textarea {
   min-width: 0;
 }
 
+.student-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .student-name.group-colored {
   color: var(--group-color);
+}
+
+.student-inline-group {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.student-inline-group.is-grouped {
+  color: var(--group-color, var(--blue-deep));
+  background: var(--group-color-soft, rgba(74, 144, 238, 0.12));
+}
+
+.student-inline-group.is-ungrouped {
+  color: var(--text-muted);
+  background: rgba(112, 136, 170, 0.14);
 }
 
 .student-name.leader-name,

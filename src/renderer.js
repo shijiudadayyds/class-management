@@ -2297,6 +2297,8 @@ function renderStudents() {
       const latest = student.history[0];
       const checked = checkedStudentIds.has(student.id);
       const groupName = getGroupName(board, student.groupId);
+      const groupOrderLabel = getStudentGroupOrderLabel(board, student.groupId);
+      const groupTagLabel = student.groupId ? groupName : '暂未分组';
       const isLeader = isGroupLeader(board, student);
       const groupStyle = getGroupStyleAttribute(board, student.groupId);
       const studentMeta = [
@@ -2312,10 +2314,13 @@ function renderStudents() {
           </label>
           <button class="student-select" type="button" data-action="select-student" data-student-id="${student.id}">
             <div class="student-main">
-              <span class="student-name ${student.groupId ? 'group-colored' : ''} ${isLeader ? 'leader-name' : ''}">${escapeHtml(student.name)}</span>
+              <div class="student-name-row">
+                <span class="student-name ${student.groupId ? 'group-colored' : ''} ${isLeader ? 'leader-name' : ''}">${escapeHtml(student.name)}</span>
+                <span class="student-inline-group ${student.groupId ? 'is-grouped' : 'is-ungrouped'}">${escapeHtml(groupOrderLabel)}</span>
+              </div>
               <span class="student-meta">${escapeHtml(studentMeta)}</span>
               <div class="student-tag-row">
-                <span class="student-group-tag ${student.groupId ? 'group-tag-colored' : ''}">${escapeHtml(groupName)}</span>
+                <span class="student-group-tag ${student.groupId ? 'group-tag-colored' : ''}">${escapeHtml(groupTagLabel)}</span>
                 ${isLeader ? '<span class="student-group-tag leader-tag">组长</span>' : ''}
                 ${student.absent ? '<span class="student-group-tag absent-tag">缺勤</span>' : ''}
               </div>
@@ -2590,6 +2595,22 @@ function getGroupName(board, groupId) {
   }
 
   return getGroupById(board, groupId)?.name || '未分组';
+}
+
+function getStudentGroupOrderLabel(board, groupId) {
+  if (!groupId) {
+    return '暂未分组';
+  }
+
+  const groupIndex = Array.isArray(board?.groups)
+    ? board.groups.findIndex((group) => group.id === groupId)
+    : -1;
+
+  if (groupIndex < 0) {
+    return '暂未分组';
+  }
+
+  return `第${groupIndex + 1}组`;
 }
 
 function getGroupLeader(board, groupId) {
