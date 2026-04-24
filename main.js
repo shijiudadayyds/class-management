@@ -8,6 +8,9 @@ const APP_ID = 'com.shijiu.classscore';
 const DATA_FILE = path.join(app.getPath('userData'), 'class-score-data.json');
 const WIDGET_STATE_FILE = path.join(app.getPath('userData'), 'widget-window.json');
 const SAFETY_SNAPSHOT_FILE = path.join(app.getPath('userData'), 'class-score-safety-snapshots.json');
+const WIDGET_WIDTH = 172;
+const WIDGET_HEIGHT = 214;
+const WIDGET_EDGE_SNAP_THRESHOLD = 26;
 const STEP_OPTIONS = [1, 2, 5, 10];
 const MAX_SAFETY_SNAPSHOTS = 12;
 const DEFAULT_PLUS_TEMPLATES = [
@@ -34,6 +37,8 @@ let widgetWindow;
 let isQuitting = false;
 let widgetStateWriteTimer;
 let widgetDragState = null;
+let widgetPositionLocked = false;
+let lastWidgetPayload = null;
 
 app.setAppUserModelId(APP_ID);
 
@@ -802,7 +807,7 @@ function getWindowIcon() {
 }
 
 function beginWidgetDrag(candidate = {}) {
-  if (!widgetWindow || widgetWindow.isDestroyed()) {
+  if (!widgetWindow || widgetWindow.isDestroyed() || widgetPositionLocked) {
     return;
   }
 
@@ -841,13 +846,20 @@ function updateWidgetDrag(candidate = {}) {
 }
 
 function endWidgetDrag() {
+  if (widgetWindow && !widgetWindow.isDestroyed() && widgetDragState) {
+    const currentBounds = widgetWindow.getBounds();
+    const snappedBounds = snapWidgetBounds(currentBounds);
+    if (snappedBounds.x !== currentBounds.x || snappedBounds.y !== currentBounds.y) {
+      widgetWindow.setBounds(snappedBounds);
+    }
+  }
   widgetDragState = null;
 }
 
 function getDefaultWidgetBounds() {
   const { workArea } = screen.getPrimaryDisplay();
-  const width = 148;
-  const height = 176;
+  const width = WIDGET_WIDTH;
+  const height = WIDGET_HEIGHT;
 
   return {
     width,
@@ -859,8 +871,8 @@ function getDefaultWidgetBounds() {
 
 function clampWidgetBounds(candidate) {
   const fallback = getDefaultWidgetBounds();
-  const width = Number.isFinite(Number(candidate?.width)) ? Number(candidate.width) : fallback.width;
-  const height = Number.isFinite(Number(candidate?.height)) ? Number(candidate.height) : fallback.height;
+  const width = WIDGET_WIDTH;
+  const height = WIDGET_HEIGHT;
   const display = screen.getDisplayNearestPoint({
     x: Number.isFinite(Number(candidate?.x)) ? Number(candidate.x) : fallback.x,
     y: Number.isFinite(Number(candidate?.y)) ? Number(candidate.y) : fallback.y
@@ -875,11 +887,38 @@ function clampWidgetBounds(candidate) {
   };
 }
 
+function snapWidgetBounds(candidate) {
+  const bounds = clampWidgetBounds(candidate);
+  const display = screen.getDisplayNearestPoint({
+    x: bounds.x + Math.round(bounds.width / 2),
+    y: bounds.y + Math.round(bounds.height / 2)
+  });
+  const { workArea } = display;
+  const snapped = { ...bounds };
+
+  if (Math.abs(bounds.x - workArea.x) <= WIDGET_EDGE_SNAP_THRESHOLD) {
+    snapped.x = workArea.x;
+  } else if (Math.abs((workArea.x + workArea.width) - (bounds.x + bounds.width)) <= WIDGET_EDGE_SNAP_THRESHOLD) {
+    snapped.x = workArea.x + workArea.width - bounds.width;
+  }
+
+  if (Math.abs(bounds.y - workArea.y) <= WIDGET_EDGE_SNAP_THRESHOLD) {
+    snapped.y = workArea.y;
+  } else if (Math.abs((workArea.y + workArea.height) - (bounds.y + bounds.height)) <= WIDGET_EDGE_SNAP_THRESHOLD) {
+    snapped.y = workArea.y + workArea.height - bounds.height;
+  }
+
+  return snapped;
+}
+
 async function readWidgetBounds() {
   try {
     const raw = await fs.readFile(WIDGET_STATE_FILE, 'utf8');
-    return clampWidgetBounds(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    widgetPositionLocked = Boolean(parsed?.locked);
+    return clampWidgetBounds(parsed);
   } catch (error) {
+    widgetPositionLocked = false;
     return getDefaultWidgetBounds();
   }
 }
@@ -893,8 +932,47 @@ function queueSaveWidgetBounds() {
   widgetStateWriteTimer = setTimeout(async () => {
     const bounds = clampWidgetBounds(widgetWindow.getBounds());
     await fs.mkdir(path.dirname(WIDGET_STATE_FILE), { recursive: true });
-    await fs.writeFile(WIDGET_STATE_FILE, `${JSON.stringify(bounds, null, 2)}\n`, 'utf8');
+    await fs.writeFile(
+      WIDGET_STATE_FILE,
+      `${JSON.stringify({ ...bounds, locked: widgetPositionLocked }, null, 2)}\n`,
+      'utf8'
+    );
   }, 180);
+}
+
+function pushWidgetState(payload = lastWidgetPayload) {
+  if (payload) {
+    lastWidgetPayload = payload;
+  }
+  if (!widgetWindow || widgetWindow.isDestroyed()) {
+    return;
+  }
+
+  const safePayload = lastWidgetPayload || {
+    mode: 'idle',
+    boardName: '班级面板',
+    primaryText: '待命',
+    secondaryText: ''
+  };
+  widgetWindow.webContents.send('widget:state', {
+    ...safePayload,
+    positionLocked: widgetPositionLocked
+  });
+}
+
+function setWidgetPositionLocked(locked) {
+  widgetPositionLocked = Boolean(locked);
+  queueSaveWidgetBounds();
+  pushWidgetState();
+}
+
+function resetWidgetWindowPosition() {
+  if (!widgetWindow || widgetWindow.isDestroyed()) {
+    return;
+  }
+
+  widgetWindow.setBounds(getDefaultWidgetBounds());
+  queueSaveWidgetBounds();
 }
 
 function createMainWindow() {
@@ -1072,6 +1150,7 @@ async function createWidgetWindow() {
   widgetWindow.loadFile(path.join(__dirname, 'src', 'widget.html'));
   widgetWindow.once('ready-to-show', () => {
     widgetWindow.showInactive();
+    pushWidgetState();
   });
   widgetWindow.on('move', () => {
     queueSaveWidgetBounds();
@@ -1309,9 +1388,7 @@ function registerIpc() {
   });
 
   ipcMain.on('widget:update', (_event, payload) => {
-    if (widgetWindow && !widgetWindow.isDestroyed()) {
-      widgetWindow.webContents.send('widget:state', payload);
-    }
+    pushWidgetState(payload);
   });
 
   ipcMain.on('widget:toggle-main', () => {
@@ -1343,6 +1420,17 @@ function registerIpc() {
       {
         label: '固定显示主窗口',
         click: () => toggleMainWindow(true)
+      },
+      { type: 'separator' },
+      {
+        label: '锁定位置',
+        type: 'checkbox',
+        checked: widgetPositionLocked,
+        click: (menuItem) => setWidgetPositionLocked(menuItem.checked)
+      },
+      {
+        label: '恢复默认位置',
+        click: () => resetWidgetWindowPosition()
       },
       { type: 'separator' },
       {

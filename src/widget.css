@@ -47,12 +47,19 @@ body.is-pressing {
   cursor: grab;
 }
 
+.widget-shell.is-locked {
+  cursor: default;
+}
+
 .widget-card {
   position: relative;
-  width: 142px;
-  height: 156px;
+  width: 172px;
+  height: 214px;
   display: grid;
-  place-items: center;
+  justify-items: center;
+  align-content: start;
+  gap: 12px;
+  padding-top: 6px;
 }
 
 .widget-button {
@@ -82,6 +89,10 @@ body.is-pressing {
 body.is-dragging .widget-button {
   transform: scale(1.03) rotate(-2deg);
   filter: saturate(1.08);
+}
+
+body.is-dragging .widget-status {
+  transform: translateY(2px);
 }
 
 .widget-button::before {
@@ -503,9 +514,76 @@ body.is-dragging .widget-button {
   animation-duration: 1.2s;
 }
 
-.widget-menu {
+.widget-status {
+  position: relative;
+  width: 160px;
+  min-height: 62px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 14px 28px rgba(37, 88, 162, 0.14);
+  backdrop-filter: blur(16px);
+  color: #ffffff;
+  transition: transform 160ms ease, background 180ms ease;
+}
+
+.widget-status.mode-countdown {
+  background: rgba(255, 184, 126, 0.28);
+}
+
+.widget-status.mode-stopwatch {
+  background: rgba(116, 235, 196, 0.24);
+}
+
+.widget-status.is-locked::after {
+  content: "已锁定";
   position: absolute;
   top: 10px;
+  right: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(34, 62, 116, 0.24);
+}
+
+.widget-board-name,
+.widget-primary-text,
+.widget-secondary-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-board-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.widget-primary-text {
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 800;
+  text-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+.widget-secondary-text {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.widget-menu {
+  position: absolute;
+  top: 8px;
   right: 8px;
   width: 34px;
   height: 34px;

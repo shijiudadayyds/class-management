@@ -1,10 +1,15 @@
 const widgetShell = document.getElementById('widgetShell');
 const toggleButton = document.getElementById('toggleMainButton');
 const menuButton = document.getElementById('widgetMenuButton');
+const widgetStatus = document.getElementById('widgetStatus');
+const widgetBoardName = document.getElementById('widgetBoardName');
+const widgetPrimaryText = document.getElementById('widgetPrimaryText');
+const widgetSecondaryText = document.getElementById('widgetSecondaryText');
 const DRAG_THRESHOLD = 6;
 
 let dragSession = null;
 let suppressClick = false;
+let positionLocked = false;
 
 function clearDragVisualState() {
   document.body.classList.remove('is-pressing');
@@ -49,6 +54,9 @@ function finishDrag(pointerId = null) {
 
 widgetShell.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) {
+    return;
+  }
+  if (positionLocked) {
     return;
   }
 
@@ -113,8 +121,19 @@ document.addEventListener('contextmenu', (event) => {
 
 window.classScore.onWidgetState((payload) => {
   const modeClass = `mode-${payload.mode || 'idle'}`;
+  positionLocked = Boolean(payload.positionLocked);
+  widgetShell.classList.toggle('is-locked', positionLocked);
   toggleButton.className = `widget-button ${modeClass}`;
+  widgetStatus.className = `widget-status ${modeClass}${positionLocked ? ' is-locked' : ''}`;
+  widgetBoardName.textContent = payload.boardName || '班级面板';
+  widgetPrimaryText.textContent = payload.mode === 'idle'
+    ? (payload.primaryText || '待命')
+    : (payload.secondaryText || '--:--');
+  widgetSecondaryText.textContent = payload.mode === 'idle'
+    ? (payload.secondaryText || '0 人待命')
+    : (payload.primaryText || '课堂工具运行中');
+  menuButton.title = positionLocked ? '更多操作（位置已锁定）' : '更多操作';
   toggleButton.title = payload.boardName
-    ? `${payload.boardName} · ${payload.primaryText || '待命'}`
+    ? `${payload.boardName} · ${payload.primaryText || '待命'}${payload.secondaryText ? ` · ${payload.secondaryText}` : ''}`
     : '显示或隐藏主窗口';
 });
