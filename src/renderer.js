@@ -28,6 +28,8 @@ const SCORE_LIMIT = 999;
 const PET_EGG_HATCH_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 const PET_EGG_ACCELERATION_HOUR_MS = 60 * 60 * 1000;
 const SHOP_ITEM_EFFECT_TYPES = ['pet-egg', 'snack', 'revive', 'collectible'];
+const PET_BATTLE_AUTO_DELAY_MS = 920;
+const PET_BATTLE_ANIMATION_MS = 760;
 const DEFAULT_SHOP_ITEMS = [
   {
     id: 'shop-pet-egg',
@@ -331,6 +333,9 @@ let tickTimer = null;
 let audioContext = null;
 let presentationModeActive = false;
 let petBattleState = null;
+let petBattleAutoTimer = null;
+let petBattleAnimationTimer = null;
+let petBattleRenderRequest = null;
 
 const stopwatch = {
   running: false,
@@ -2643,6 +2648,115 @@ function appendPetBattleLog(session, text, tone = 'neutral') {
   }
 }
 
+function syncPetBattleSession(session) {
+  if (!session || typeof session !== 'object') {
+    return session;
+  }
+
+  if (!Array.isArray(session.log)) {
+    session.log = [];
+  }
+  if (!Number.isFinite(Number(session.round))) {
+    session.round = 0;
+  }
+  if (typeof session.autoMode !== 'boolean') {
+    session.autoMode = false;
+  }
+  if (!Number.isFinite(Number(session.autoDelayMs))) {
+    session.autoDelayMs = PET_BATTLE_AUTO_DELAY_MS;
+  }
+  if (typeof session.lastRoundSummary !== 'string') {
+    session.lastRoundSummary = '';
+  }
+  if (!('animation' in session)) {
+    session.animation = null;
+  }
+
+  return session;
+}
+
+function setPetBattleRenderHook(callback) {
+  petBattleRenderRequest = typeof callback === 'function' ? callback : null;
+}
+
+function clearPetBattleRenderHook() {
+  petBattleRenderRequest = null;
+}
+
+function requestPetBattleRender() {
+  if (typeof petBattleRenderRequest === 'function') {
+    petBattleRenderRequest();
+  }
+}
+
+function clearPetBattleAutoLoop() {
+  window.clearTimeout(petBattleAutoTimer);
+  petBattleAutoTimer = null;
+}
+
+function clearPetBattleAnimation() {
+  window.clearTimeout(petBattleAnimationTimer);
+  petBattleAnimationTimer = null;
+  if (petBattleState) {
+    petBattleState.animation = null;
+  }
+}
+
+function setPetBattleAnimation(animation) {
+  if (!petBattleState) {
+    return;
+  }
+
+  clearPetBattleAnimation();
+  petBattleState.animation = {
+    ...animation,
+    id: createId('battle-animation')
+  };
+  requestPetBattleRender();
+
+  const animationId = petBattleState.animation.id;
+  petBattleAnimationTimer = window.setTimeout(() => {
+    if (petBattleState?.animation?.id === animationId) {
+      petBattleState.animation = null;
+      requestPetBattleRender();
+    }
+  }, PET_BATTLE_ANIMATION_MS);
+}
+
+function schedulePetBattleAutoLoop(delayMs = PET_BATTLE_AUTO_DELAY_MS) {
+  clearPetBattleAutoLoop();
+  if (!petBattleState?.autoMode || petBattleState.status !== 'active') {
+    return;
+  }
+
+  petBattleAutoTimer = window.setTimeout(() => {
+    if (!petBattleState?.autoMode || petBattleState.status !== 'active') {
+      return;
+    }
+    performPetBattleRound('auto');
+  }, Math.max(240, Number(delayMs) || PET_BATTLE_AUTO_DELAY_MS));
+}
+
+function setPetBattleAutoMode(enabled, options = {}) {
+  if (!petBattleState) {
+    return false;
+  }
+
+  petBattleState.autoMode = Boolean(enabled);
+  if (Number.isFinite(Number(options.delayMs))) {
+    petBattleState.autoDelayMs = Math.max(240, Math.round(Number(options.delayMs)));
+  }
+
+  if (!petBattleState.autoMode || petBattleState.status !== 'active') {
+    clearPetBattleAutoLoop();
+  } else {
+    schedulePetBattleAutoLoop(options.delayMs || petBattleState.autoDelayMs);
+  }
+
+  requestPetBattleRender();
+  return petBattleState.autoMode;
+}
+
 function createBattlePetSnapshot(pet) {
   const snapshot = normalizePet({
     ...pet,
@@ -2654,7 +2768,7 @@ function createBattlePetSnapshot(pet) {
 }
 
 function createPetBattleLobby(board, student, pet) {
-  return {
+  return syncPetBattleSession({
     boardId: board.id,
     studentId: student.id,
     petId: pet.id,
@@ -2665,8 +2779,13 @@ function createPetBattleLobby(board, student, pet) {
     opponentPet: null,
     log: [],
     result: null,
-    persisted: false
-  };
+    persisted: false,
+    round: 0,
+    autoMode: false,
+    autoDelayMs: PET_BATTLE_AUTO_DELAY_MS,
+    lastRoundSummary: '',
+    animation: null
+  });
 }
 
 function ensurePetBattleState(board, student, pet) {
@@ -2680,7 +2799,7 @@ function ensurePetBattleState(board, student, pet) {
     petBattleState = createPetBattleLobby(board, student, pet);
   }
 
-  return petBattleState;
+  return syncPetBattleSession(petBattleState);
 }
 
 function getPetBattleStateForRender(board, student, pet) {
@@ -2693,7 +2812,7 @@ function getPetBattleStateForRender(board, student, pet) {
     petBattleState = createPetBattleLobby(board, student, pet);
   }
 
-  return petBattleState;
+  return syncPetBattleSession(petBattleState);
 }
 
 function getArenaOpponentTemplate(opponentId) {
@@ -2838,19 +2957,111 @@ function renderIncubatingEggCards(student) {
   }).join('');
 }
 
-function pickArenaBattleAction(pet) {
-  const skills = getPetLearnedSkills(pet).filter((skill) => pet.currentMana >= skill.manaCost);
-  if (skills.length > 0 && Math.random() < 0.58) {
-    return {
-      type: 'skill',
-      skill: skills[Math.floor(Math.random() * skills.length)]
-    };
+function createBattleAction(type, skill = null) {
+  return {
+    type,
+    skill: type === 'skill' ? skill : null
+  };
+}
+
+function estimatePetBattleActionScore(attacker, defender, action) {
+  const attackerStats = getPetDerivedStats(attacker);
+  const defenderStats = getPetDerivedStats(defender);
+  const skill = action?.type === 'skill' ? action.skill : null;
+  const missingHp = Math.max(0, attackerStats.maxHp - (Number(attacker.currentHp) || 0));
+  const missingMana = Math.max(0, attackerStats.maxMana - (Number(attacker.currentMana) || 0));
+  const opponentMana = Math.max(0, Number(defender.currentMana) || 0);
+  const averageAttack = (attackerStats.attackMin + attackerStats.attackMax) / 2;
+  const averageSkillDamage = skill
+    ? ((skill.minDamage + skill.maxDamage) / 2) + (averageAttack * 0.38)
+    : averageAttack;
+  const mitigation = Math.min(0.58, defenderStats.defense / (defenderStats.defense + averageSkillDamage + 18));
+  let score = averageSkillDamage * (1 - mitigation);
+
+  if (skill) {
+    score -= skill.manaCost * 0.32;
+    if (skill.restoreHpRatio) {
+      score += Math.min(missingHp, Math.round(attackerStats.maxHp * skill.restoreHpRatio)) * 1.45;
+    }
+    if (skill.restoreMana) {
+      score += Math.min(missingMana, skill.restoreMana * 3) * 0.8;
+    }
+    if (skill.manaBurn) {
+      score += Math.min(opponentMana, skill.manaBurn) * 1.15;
+    }
+    if (skill.defenseBuff) {
+      score += skill.defenseBuff * (missingHp > attackerStats.maxHp * 0.28 ? 8 : 4.5);
+    }
+    if (skill.dodgeBoost) {
+      score += skill.dodgeBoost * 130;
+    }
+    if (skill.critBoost) {
+      score += skill.critBoost * score * 1.35;
+    }
+  } else {
+    score += Math.min(missingMana, 8) * 1.2;
   }
 
-  return {
-    type: 'normal',
-    skill: null
-  };
+  if (score >= Math.max(12, Number(defender.currentHp) || 0)) {
+    score += 26;
+  }
+  if ((Number(attacker.currentHp) || 0) <= attackerStats.maxHp * 0.34 && !skill) {
+    score -= 12;
+  }
+
+  return score;
+}
+
+function pickArenaBattleAction(pet, opponent = null, options = {}) {
+  const availableSkills = getPetLearnedSkills(pet).filter((skill) => pet.currentMana >= skill.manaCost);
+  const normalAction = createBattleAction('normal');
+
+  if (!opponent || availableSkills.length === 0) {
+    return normalAction;
+  }
+
+  const normalScore = estimatePetBattleActionScore(pet, opponent, normalAction);
+  const rankedSkillActions = availableSkills
+    .map((skill) => ({
+      action: createBattleAction('skill', skill),
+      score: estimatePetBattleActionScore(pet, opponent, createBattleAction('skill', skill))
+    }))
+    .sort((left, right) => right.score - left.score);
+
+  const bestSkill = rankedSkillActions[0] || null;
+  const preferSkill = Boolean(options.preferSkill);
+  const threshold = preferSkill ? 2 : 8;
+
+  if (bestSkill && bestSkill.score >= normalScore + threshold) {
+    return bestSkill.action;
+  }
+
+  return normalAction;
+}
+
+function getPetBattleActionLabel(actorName, action) {
+  if (action?.type === 'skill' && action.skill) {
+    return `${actorName} 释放了 ${action.skill.name}`;
+  }
+
+  return `${actorName} 发动普通攻击`;
+}
+
+function getPetBattleInitiative(pet, action) {
+  const stats = getPetDerivedStats(pet);
+  const manaRatio = stats.maxMana > 0 ? (Math.max(0, Number(pet.currentMana) || 0) / stats.maxMana) : 0;
+  const hpRatio = stats.maxHp > 0 ? (Math.max(0, Number(pet.currentHp) || 0) / stats.maxHp) : 0;
+  const skillBias = action?.type === 'skill' ? 3.5 : 0;
+  return (stats.level * 4.5) + (stats.dodgeRate * 120) + (stats.critRate * 40) + (manaRatio * 18) + (hpRatio * 8) + skillBias + (Math.random() * 10);
+}
+
+function decayPetBattleBuffs(pet) {
+  if (!pet) {
+    return;
+  }
+
+  pet.defenseBuff = Math.max(0, Math.floor(Number(pet.defenseBuff) || 0) - 1);
+  pet.dodgeBuff = Math.max(0, Number((Math.max(0, Number(pet.dodgeBuff) || 0) - 0.02).toFixed(2)));
 }
 
 function resolvePetBattleMove(attacker, defender, action) {
@@ -2868,26 +3079,32 @@ function resolvePetBattleMove(attacker, defender, action) {
     adjustPetVitals(attacker, 0, -skill.manaCost);
   }
 
-  const actionLabel = skill ? `${attacker.name} 释放了 ${skill.name}` : `${attacker.name} 发动普通攻击`;
-  if (Math.random() < Math.min(0.45, defenderStats.dodgeRate)) {
+  const actionLabel = getPetBattleActionLabel(attacker.name, action);
+  const dodgeChance = Math.min(0.34, defenderStats.dodgeRate * (skill ? 0.92 : 1.08));
+  if (Math.random() < dodgeChance) {
     return {
       ok: true,
       damage: 0,
       crit: false,
       dodged: true,
+      actionType: action?.type || 'normal',
+      skillName: skill?.name || '',
       log: `${actionLabel}，但被 ${defender.name} 闪避了。`
     };
   }
 
-  const baseMin = skill ? skill.minDamage + Math.round(attackerStats.attackMin * 0.35) : attackerStats.attackMin;
-  const baseMax = skill ? skill.maxDamage + Math.round(attackerStats.attackMax * 0.4) : attackerStats.attackMax;
-  let damage = Math.max(1, rollPetValue(baseMin, baseMax) - Math.round(defenderStats.defense * 0.45));
-  const crit = Math.random() < Math.min(0.6, attackerStats.critRate + Math.max(0, skill?.critBoost || 0));
+  const baseMin = skill ? skill.minDamage + Math.round(attackerStats.attackMin * 0.32) : attackerStats.attackMin;
+  const baseMax = skill ? skill.maxDamage + Math.round(attackerStats.attackMax * 0.38) : attackerStats.attackMax;
+  const rolledPower = rollPetValue(baseMin, baseMax);
+  const mitigation = Math.min(0.58, defenderStats.defense / (defenderStats.defense + rolledPower + 18));
+  let damage = Math.max(1, Math.round(rolledPower * (1 - mitigation)));
+  const crit = Math.random() < Math.min(0.52, attackerStats.critRate + Math.max(0, skill?.critBoost || 0));
   if (crit) {
-    damage *= 2;
+    damage = Math.max(damage + 1, Math.round(damage * 1.75));
   }
 
-  adjustPetVitals(defender, -damage, -(skill?.manaBurn || 0));
+  const manaBurn = Math.min(Math.max(0, Number(skill?.manaBurn) || 0), Math.max(0, Number(defender.currentMana) || 0));
+  adjustPetVitals(defender, -damage, -manaBurn);
 
   let heal = 0;
   let restoreMana = 0;
@@ -2900,8 +3117,8 @@ function resolvePetBattleMove(attacker, defender, action) {
     adjustPetVitals(attacker, 0, restoreMana);
   }
   if (!skill) {
-    adjustPetVitals(attacker, 0, 6);
-    restoreMana = 6;
+    adjustPetVitals(attacker, 0, 8);
+    restoreMana = 8;
   }
   if (skill?.defenseBuff) {
     attacker.defenseBuff = Math.min(18, Math.floor(Number(attacker.defenseBuff) || 0) + skill.defenseBuff);
@@ -2914,8 +3131,8 @@ function resolvePetBattleMove(attacker, defender, action) {
   if (crit) {
     notes.push('触发暴击');
   }
-  if (skill?.manaBurn) {
-    notes.push(`额外削减 ${defender.name} ${skill.manaBurn} 点蓝量`);
+  if (manaBurn > 0) {
+    notes.push(`额外削减 ${defender.name} ${manaBurn} 点蓝量`);
   }
   if (heal > 0) {
     notes.push(`回复 ${heal} 点生命`);
@@ -2938,6 +3155,11 @@ function resolvePetBattleMove(attacker, defender, action) {
     damage,
     crit,
     dodged: false,
+    heal,
+    restoreMana,
+    manaBurn,
+    actionType: action?.type || 'normal',
+    skillName: skill?.name || '',
     log: `${notes.join('，')}。`
   };
 }
@@ -2986,6 +3208,9 @@ function settlePetBattle(outcome) {
       ? `${pet.name} 战败倒下，需使用复活币才能继续出战。`
       : `${pet.name} 本场落败，已记录战绩。`;
 
+  clearPetBattleAutoLoop();
+  clearPetBattleAnimation();
+  petBattleState.autoMode = false;
   petBattleState.status = outcome;
   petBattleState.result = {
     outcome,
@@ -2995,7 +3220,9 @@ function settlePetBattle(outcome) {
     rewardCoins: petBattleState.opponentTemplate?.rewardCoins || 0
   };
   petBattleState.persisted = true;
+  petBattleState.lastRoundSummary = message;
   commitState(message);
+  requestPetBattleRender();
 }
 
 function performPetBattleRound(actionType, skillId = '') {
@@ -3003,42 +3230,102 @@ function performPetBattleRound(actionType, skillId = '') {
     return false;
   }
 
+  syncPetBattleSession(petBattleState);
+
   const playerAction = actionType === 'skill'
-    ? {
-        type: 'skill',
-        skill: getPetLearnedSkills(petBattleState.playerPet).find((skill) => skill.id === skillId) || null
-      }
-    : {
-        type: 'normal',
-        skill: null
-      };
+    ? createBattleAction('skill', getPetLearnedSkills(petBattleState.playerPet).find((skill) => skill.id === skillId) || null)
+    : actionType === 'auto'
+      ? pickArenaBattleAction(petBattleState.playerPet, petBattleState.opponentPet, { preferSkill: true, role: 'player' })
+      : createBattleAction('normal');
 
   if (actionType === 'skill' && !playerAction.skill) {
     showToast('当前技能不可用。');
     return false;
   }
 
-  const playerResult = resolvePetBattleMove(petBattleState.playerPet, petBattleState.opponentPet, playerAction);
-  if (!playerResult.ok) {
-    showToast(playerResult.log);
-    return false;
-  }
-  appendPetBattleLog(petBattleState, playerResult.log, 'positive');
-  if (isPetDead(petBattleState.opponentPet)) {
-    appendPetBattleLog(petBattleState, `${petBattleState.playerPet.name} 赢下了这场对战。`, 'positive');
-    settlePetBattle('win');
-    return true;
+  const enemyAction = pickArenaBattleAction(petBattleState.opponentPet, petBattleState.playerPet, { preferSkill: true, role: 'enemy' });
+  const currentRound = (petBattleState.round || 0) + 1;
+  petBattleState.round = currentRound;
+  appendPetBattleLog(petBattleState, `第 ${currentRound} 回合开始。`, 'neutral');
+
+  const actionOrder = [
+    {
+      side: 'player',
+      actor: petBattleState.playerPet,
+      defender: petBattleState.opponentPet,
+      action: playerAction,
+      tone: 'positive'
+    },
+    {
+      side: 'enemy',
+      actor: petBattleState.opponentPet,
+      defender: petBattleState.playerPet,
+      action: enemyAction,
+      tone: 'negative'
+    }
+  ].sort((left, right) => {
+    const initiativeDiff = getPetBattleInitiative(right.actor, right.action) - getPetBattleInitiative(left.actor, left.action);
+    if (Math.abs(initiativeDiff) > 0.01) {
+      return initiativeDiff;
+    }
+    return left.side === 'player' ? -1 : 1;
+  });
+
+  for (const step of actionOrder) {
+    if (isPetDead(step.actor) || isPetDead(step.defender)) {
+      continue;
+    }
+
+    const result = resolvePetBattleMove(step.actor, step.defender, step.action);
+    if (!result.ok) {
+      if (step.side === 'player') {
+        showToast(result.log);
+        petBattleState.autoMode = false;
+        clearPetBattleAutoLoop();
+      } else {
+        appendPetBattleLog(petBattleState, result.log, step.tone);
+      }
+      requestPetBattleRender();
+      return false;
+    }
+
+    appendPetBattleLog(petBattleState, result.log, step.tone);
+    petBattleState.lastRoundSummary = result.log;
+    setPetBattleAnimation({
+      actorSide: step.side,
+      targetSide: step.side === 'player' ? 'enemy' : 'player',
+      type: result.dodged ? 'dodged' : result.crit ? 'crit' : (result.actionType === 'skill' ? 'skill' : 'hit'),
+      label: result.dodged
+        ? '闪避'
+        : result.crit
+          ? `暴击 -${result.damage}`
+          : `${step.action.type === 'skill' ? step.action.skill?.name || '技能' : `-${result.damage}`}`,
+      damage: result.damage || 0,
+      heal: result.heal || 0,
+      restoreMana: result.restoreMana || 0,
+      manaBurn: result.manaBurn || 0,
+      round: currentRound
+    });
+
+    if (isPetDead(step.defender)) {
+      appendPetBattleLog(
+        petBattleState,
+        `${step.actor.name} 赢下了这场对战。`,
+        step.side === 'player' ? 'positive' : 'negative'
+      );
+      settlePetBattle(step.side === 'player' ? 'win' : 'loss');
+      return true;
+    }
   }
 
-  const enemyAction = pickArenaBattleAction(petBattleState.opponentPet);
-  const enemyResult = resolvePetBattleMove(petBattleState.opponentPet, petBattleState.playerPet, enemyAction);
-  if (enemyResult.ok) {
-    appendPetBattleLog(petBattleState, enemyResult.log, 'negative');
+  decayPetBattleBuffs(petBattleState.playerPet);
+  decayPetBattleBuffs(petBattleState.opponentPet);
+
+  if (petBattleState.autoMode) {
+    schedulePetBattleAutoLoop(petBattleState.autoDelayMs);
   }
-  if (isPetDead(petBattleState.playerPet)) {
-    appendPetBattleLog(petBattleState, `${petBattleState.playerPet.name} 倒下了，本场挑战结束。`, 'negative');
-    settlePetBattle('loss');
-  }
+
+  requestPetBattleRender();
 
   return true;
 }
@@ -6351,7 +6638,7 @@ function learnSkillForActivePet(skillId) {
   reopenPetHomeLater();
 }
 
-function startPetBattleChallenge(opponentId) {
+function startPetBattleChallenge(opponentId, options = {}) {
   const board = getActiveBoard();
   const student = getSelectedStudent();
   const pet = getActivePet(student);
@@ -6369,12 +6656,18 @@ function startPetBattleChallenge(opponentId) {
     return false;
   }
 
+  clearPetBattleAutoLoop();
+  clearPetBattleAnimation();
   petBattleState = {
     ...createPetBattleLobby(board, student, pet),
     status: 'active',
     opponentId: opponentTemplate.id,
     opponentTemplate,
-    opponentPet: createArenaPetFromTemplate(opponentTemplate, pet)
+    opponentPet: createArenaPetFromTemplate(opponentTemplate, pet),
+    autoMode: Boolean(options.autoMode),
+    autoDelayMs: PET_BATTLE_AUTO_DELAY_MS,
+    round: 0,
+    lastRoundSummary: ''
   };
 
   appendPetBattleLog(
@@ -6382,6 +6675,10 @@ function startPetBattleChallenge(opponentId) {
     `${petBattleState.playerPet.name} 支付 ${opponentTemplate.entryCost || 0} 积分进入竞技场，对手是 ${petBattleState.opponentPet.name}。`,
     'neutral'
   );
+  requestPetBattleRender();
+  if (petBattleState.autoMode) {
+    schedulePetBattleAutoLoop(360);
+  }
   return true;
 }
 

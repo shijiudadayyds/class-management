@@ -47,6 +47,50 @@
       const playerStats = getPetDerivedStats(playerPet);
       const learnedSkills = getPetLearnedSkills(playerPet);
       const reviveItems = getReviveItems(board, student);
+      const animation = session.animation || null;
+      const buildBattleCardClasses = (side) => {
+        const classes = ['pet-battle-card'];
+        if (!animation) {
+          return classes.join(' ');
+        }
+
+        if (animation.actorSide === side) {
+          classes.push('is-acting');
+          classes.push(animation.type === 'skill' ? 'is-skill-cast' : 'is-basic-cast');
+        }
+        if (animation.targetSide === side) {
+          classes.push(animation.type === 'dodged' ? 'is-dodged' : 'is-hit');
+          if (animation.type === 'crit') {
+            classes.push('is-crit-hit');
+          }
+        }
+
+        return classes.join(' ');
+      };
+      const buildBattleFx = (side) => {
+        if (!animation || (animation.actorSide !== side && animation.targetSide !== side)) {
+          return '';
+        }
+
+        if (animation.actorSide === side) {
+          const actorLabel = animation.type === 'skill'
+            ? `✨ ${animation.label}`
+            : animation.type === 'dodged'
+              ? '出手未中'
+              : '出手';
+          return `<div class="pet-battle-fx is-actor"><span>${escapeHtml(actorLabel)}</span></div>`;
+        }
+
+        const targetLabel = animation.type === 'dodged'
+          ? '闪避'
+          : animation.type === 'crit'
+            ? `暴击 -${animation.damage}`
+            : `-${animation.damage}`;
+        return `<div class="pet-battle-fx is-target ${animation.type === 'dodged' ? 'is-dodge' : ''}"><span>${escapeHtml(targetLabel)}</span></div>`;
+      };
+      const roundText = session.round > 0 ? `第 ${session.round} 回合` : '准备中';
+      const autoButtonText = session.autoMode ? '暂停自动战斗' : '开启自动战斗';
+      const autoButtonClass = session.autoMode ? 'mini-action mini-action-orange' : 'mini-action';
 
       if (session.status === 'lobby') {
         return `
@@ -97,7 +141,10 @@
                       <span class="preview-tag">成长奖励 +${opponent.rewardGrowth}</span>
                       <span class="preview-tag">攻击 ${arenaStats.attackMin}-${arenaStats.attackMax}</span>
                     </div>
-                    <button class="mini-action mini-action-orange" type="button" data-action="battle-start" data-opponent-id="${opponent.id}" ${isPetDead(pet) ? 'disabled' : ''}>开始挑战</button>
+                    <div class="timer-actions">
+                      <button class="mini-action mini-action-orange" type="button" data-action="battle-start" data-opponent-id="${opponent.id}" ${isPetDead(pet) ? 'disabled' : ''}>开始挑战</button>
+                      <button class="mini-action" type="button" data-action="battle-start-auto" data-opponent-id="${opponent.id}" ${isPetDead(pet) ? 'disabled' : ''}>自动挑战</button>
+                    </div>
                   </article>
                 `;
               }).join('')}
@@ -126,8 +173,14 @@
         </div>
         ${(session.status === 'win' || session.status === 'loss') ? `<section class="pet-result-banner ${session.status === 'win' ? 'is-win' : 'is-loss'}"><strong>${resultTitle}</strong><small>${escapeHtml(resultCopy)}</small></section>` : ''}
         <section class="pet-battle-shell">
+          <div class="battle-status-bar">
+            <span class="battle-status-pill">${roundText}</span>
+            <span class="battle-status-pill ${session.autoMode ? 'is-auto' : 'is-manual'}">${session.autoMode ? '自动战斗中' : '手动模式'}</span>
+            ${session.lastRoundSummary ? `<span class="battle-status-copy">${escapeHtml(session.lastRoundSummary)}</span>` : ''}
+          </div>
           <div class="pet-battle-stage">
-            <article class="pet-battle-card" ${getPetThemeStyleAttribute(playerPet.speciesId)}>
+            <article class="${buildBattleCardClasses('player')}" ${getPetThemeStyleAttribute(playerPet.speciesId)}>
+              ${buildBattleFx('player')}
               ${renderPetAvatarMarkup(playerPet.speciesId, playerPet.name)}
               <div class="pet-battle-copy">
                 <strong>${escapeHtml(playerPet.name)}</strong>
@@ -140,7 +193,8 @@
                 </div>
               </div>
             </article>
-            <article class="pet-battle-card" ${getPetThemeStyleAttribute(opponentPet.speciesId)}>
+            <article class="${buildBattleCardClasses('enemy')}" ${getPetThemeStyleAttribute(opponentPet.speciesId)}>
+              ${buildBattleFx('enemy')}
               ${renderPetAvatarMarkup(opponentPet.speciesId, opponentPet.name)}
               <div class="pet-battle-copy">
                 <strong>${escapeHtml(opponentPet.name)}</strong>
@@ -158,10 +212,12 @@
             <h3>战斗操作</h3>
             ${session.status === 'active' ? `
               <div class="pet-battle-actions">
-                <button class="mini-action mini-action-green" type="button" data-action="battle-attack">普通攻击</button>
+                <button class="mini-action mini-action-green" type="button" data-action="battle-attack" ${session.autoMode ? 'disabled' : ''}>普通攻击</button>
+                <button class="mini-action" type="button" data-action="battle-auto-turn" ${session.autoMode ? 'disabled' : ''}>智能出招</button>
+                <button class="${autoButtonClass}" type="button" data-action="battle-toggle-auto">${autoButtonText}</button>
               </div>
-              <p class="modal-help">普通攻击会回复 6 点蓝量；技能会消耗蓝量并触发额外效果。</p>
-              ${learnedSkills.length > 0 ? `<div class="pet-skill-grid">${learnedSkills.map((skill) => `<article class="pet-skill-card ${playerPet.currentMana >= skill.manaCost ? 'is-learned' : 'is-locked'}"><div class="pet-skill-head"><div><strong>${escapeHtml(skill.name)}</strong><small>MP ${skill.manaCost} · 伤害 ${skill.minDamage}-${skill.maxDamage}</small></div><span class="preview-tag">${playerPet.currentMana >= skill.manaCost ? '可释放' : '蓝量不足'}</span></div><p class="modal-help">${escapeHtml(skill.description)}</p><button class="mini-action mini-action-orange" type="button" data-action="battle-skill" data-skill-id="${skill.id}" ${playerPet.currentMana >= skill.manaCost ? '' : 'disabled'}>释放技能</button></article>`).join('')}</div>` : `<div class="empty-state">当前没有已学技能，本场可以先用普通攻击完成对战。</div>`}
+              <p class="modal-help">${session.autoMode ? '自动战斗会根据血量、蓝量和技能收益自动出招；你也可以随时暂停。' : '普通攻击会回复蓝量；“智能出招”会自动判断是否使用技能。'}</p>
+              ${learnedSkills.length > 0 ? `<div class="pet-skill-grid">${learnedSkills.map((skill) => `<article class="pet-skill-card ${playerPet.currentMana >= skill.manaCost ? 'is-learned' : 'is-locked'}"><div class="pet-skill-head"><div><strong>${escapeHtml(skill.name)}</strong><small>MP ${skill.manaCost} · 伤害 ${skill.minDamage}-${skill.maxDamage}</small></div><span class="preview-tag">${playerPet.currentMana >= skill.manaCost ? '可释放' : '蓝量不足'}</span></div><p class="modal-help">${escapeHtml(skill.description)}</p><button class="mini-action mini-action-orange" type="button" data-action="battle-skill" data-skill-id="${skill.id}" ${playerPet.currentMana >= skill.manaCost && !session.autoMode ? '' : 'disabled'}>释放技能</button></article>`).join('')}</div>` : `<div class="empty-state">当前没有已学技能，本场可以先用普通攻击完成对战。</div>`}
             ` : `<div class="empty-state">本场战斗已经结算，可以返回家园调整状态，或重新匹配下一场。</div>`}
           </section>
           <section class="modal-panel">
@@ -198,6 +254,7 @@
             }
             body.innerHTML = renderPetBattleModal(freshBoard, freshStudent);
           };
+          setPetBattleRenderHook(rerender);
 
           const handleClick = (event) => {
             const actionNode = event.target.closest('[data-action]');
@@ -223,10 +280,31 @@
               }
               return;
             }
+            if (action === 'battle-start-auto') {
+              if (startPetBattleChallenge(opponentId, { autoMode: true })) {
+                rerender();
+              }
+              return;
+            }
             if (action === 'battle-attack') {
               if (performPetBattleRound('normal')) {
                 rerender();
               }
+              return;
+            }
+            if (action === 'battle-auto-turn') {
+              if (performPetBattleRound('auto')) {
+                rerender();
+              }
+              return;
+            }
+            if (action === 'battle-toggle-auto') {
+              const currentSession = petBattleState;
+              if (!currentSession || currentSession.status !== 'active') {
+                return;
+              }
+              setPetBattleAutoMode(!currentSession.autoMode, { delayMs: currentSession.autoMode ? currentSession.autoDelayMs : 320 });
+              rerender();
               return;
             }
             if (action === 'battle-skill') {
@@ -242,6 +320,8 @@
               if (!freshBoard || !freshStudent || !freshPet) {
                 return;
               }
+              clearPetBattleAutoLoop();
+              clearPetBattleAnimation();
               petBattleState = createPetBattleLobby(freshBoard, freshStudent, freshPet);
               rerender();
             }
@@ -249,6 +329,12 @@
 
           body.addEventListener('click', handleClick);
           return () => {
+            clearPetBattleAutoLoop();
+            clearPetBattleAnimation();
+            if (petBattleState) {
+              petBattleState.autoMode = false;
+            }
+            clearPetBattleRenderHook();
             body.removeEventListener('click', handleClick);
           };
         }
