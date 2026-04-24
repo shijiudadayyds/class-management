@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('classScore', {
   updateWidgetState: (payload) => ipcRenderer.send('widget:update', payload),
   toggleMainWindow: () => ipcRenderer.send('widget:toggle-main'),
   showMainWindow: () => ipcRenderer.send('main:show'),
+  startWidgetDrag: (screenX, screenY) => ipcRenderer.send('widget:drag-start', { screenX, screenY }),
+  updateWidgetDrag: (screenX, screenY) => ipcRenderer.send('widget:drag-move', { screenX, screenY }),
+  endWidgetDrag: () => ipcRenderer.send('widget:drag-end'),
   openWidgetMenu: () => ipcRenderer.send('widget:open-menu'),
   onWidgetState: (callback) => {
     const handler = (_event, payload) => callback(payload);

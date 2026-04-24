@@ -33,6 +33,7 @@ let mainWindow;
 let widgetWindow;
 let isQuitting = false;
 let widgetStateWriteTimer;
+let widgetDragState = null;
 
 app.setAppUserModelId(APP_ID);
 
@@ -800,6 +801,49 @@ function getWindowIcon() {
   return createAppIcon(256);
 }
 
+function beginWidgetDrag(candidate = {}) {
+  if (!widgetWindow || widgetWindow.isDestroyed()) {
+    return;
+  }
+
+  const screenX = Number(candidate.screenX);
+  const screenY = Number(candidate.screenY);
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+    return;
+  }
+
+  const bounds = widgetWindow.getBounds();
+  widgetDragState = {
+    pointerStartX: screenX,
+    pointerStartY: screenY,
+    windowStartX: bounds.x,
+    windowStartY: bounds.y
+  };
+}
+
+function updateWidgetDrag(candidate = {}) {
+  if (!widgetWindow || widgetWindow.isDestroyed() || !widgetDragState) {
+    return;
+  }
+
+  const screenX = Number(candidate.screenX);
+  const screenY = Number(candidate.screenY);
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+    return;
+  }
+
+  const nextBounds = clampWidgetBounds({
+    ...widgetWindow.getBounds(),
+    x: widgetDragState.windowStartX + Math.round(screenX - widgetDragState.pointerStartX),
+    y: widgetDragState.windowStartY + Math.round(screenY - widgetDragState.pointerStartY)
+  });
+  widgetWindow.setBounds(nextBounds);
+}
+
+function endWidgetDrag() {
+  widgetDragState = null;
+}
+
 function getDefaultWidgetBounds() {
   const { workArea } = screen.getPrimaryDisplay();
   const width = 148;
@@ -1272,6 +1316,18 @@ function registerIpc() {
 
   ipcMain.on('widget:toggle-main', () => {
     toggleMainWindow();
+  });
+
+  ipcMain.on('widget:drag-start', (_event, payload) => {
+    beginWidgetDrag(payload);
+  });
+
+  ipcMain.on('widget:drag-move', (_event, payload) => {
+    updateWidgetDrag(payload);
+  });
+
+  ipcMain.on('widget:drag-end', () => {
+    endWidgetDrag();
   });
 
   ipcMain.on('main:show', () => {
