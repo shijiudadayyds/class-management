@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js && node --check src/widget.js && node --check src/app-runtime.js && node --check src/ui-runtime.js && node --check src/shop-runtime.js && node --check src/renderer-overrides.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win nsis portable"
   },
